@@ -1,0 +1,63 @@
+---
+- name: Установить Docker и запустить приложение
+  hosts: server
+  become: true
+
+  tasks:
+    - name: Проверить наличие репозитория Docker на Debian
+      ansible.builtin.stat:
+        path: /etc/apt/sources.list.d/docker.list
+      register: docker_repo
+      when: ansible_distribution == 'Debian'
+
+    - name: Создать папку для ключа Docker на Debian
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: '0755'
+      when: ansible_distribution == 'Debian' and not docker_repo.stat.exists
+
+    - name: Скачать ключ репозитория Docker на Debian
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /etc/apt/keyrings/docker.asc
+        mode: '0644'
+      when: ansible_distribution == 'Debian' and not docker_repo.stat.exists
+
+    - name: Добавить репозиторий Docker на Debian
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian {{ ansible_distribution_release }} stable"
+        filename: docker
+        state: present
+      when: ansible_distribution == 'Debian' and not docker_repo.stat.exists
+
+    - name: Установить Docker, Compose и Git
+      ansible.builtin.apt:
+        name: "{{ ['docker-ce', 'docker-compose-plugin', 'git'] if ansible_distribution == 'Debian' else ['docker.io', 'docker-compose-v2', 'git'] }}"
+        update_cache: true
+        state: present
+
+    - name: Запустить Docker при старте сервера
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+
+    - name: Скопировать приложение из Git на сервер
+      ansible.builtin.git:
+        repo: "{{ git_repo }}"
+        dest: /opt/devops_lab_git
+        version: main
+      when: not (deploy_from_local | default(false) | bool)
+
+    - name: Скопировать локальные файлы приложения на сервер
+      ansible.builtin.copy:
+        src: "{{ playbook_dir }}/"
+        dest: /opt/devops_lab/lab_1/
+        mode: preserve
+      when: deploy_from_local | default(false) | bool
+
+    - name: Собрать образы и запустить контейнеры
+      ansible.builtin.command: docker compose up -d --build
+      args:
+        chdir: "{{ '/opt/devops_lab/lab_1' if deploy_from_local | default(false) | bool else '/opt/devops_lab_git/lab_1' }}"
